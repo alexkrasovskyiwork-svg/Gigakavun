@@ -4,17 +4,49 @@
 
 # Run and deploy your AI Studio app
 
-This contains everything you need to run your app locally.
+Цей репозиторій містить все, що потрібно, щоб запустити ваш AI Studio застосунок як вебapp.
 
-View your app in AI Studio: https://ai.studio/apps/drive/16ew4A1gQtF2lvC4_rfS39PlBXu3VO59b
+## Дуже прості кроки
+1. **Розпакуйте проект** у зручну теку (наприклад, `Documents/ai-app`).
+2. **Відкрийте термінал у цій теці.**
+   - Windows: PowerShell / Command Prompt.
+   - macOS: Terminal.
+3. **Встановіть залежності:**
+   ```bash
+   npm install
+   ```
+4. **Створіть файл `.env.local` у корені проекту** (є приклад [.env.local.example](.env.local.example)) і додайте свій ключ Gemini:
+   ```
+   GEMINI_API_KEY=ваш_ключ
+   ```
+5. **Запустіть сервер розробки:**
+   ```bash
+   npm run dev
+   ```
+6. У терміналі з'явиться адреса (наприклад, `http://localhost:5173`). **Відкрийте її в браузері** на цьому ПК.
 
-## Run Locally
+## Як підключити другий пристрій
+- Якщо обидва пристрої в одній мережі Wi‑Fi/Ethernet, відкрийте адресу `http://IP_цього_ПК:порт`, де IP можна дізнатись через `ipconfig` (Windows) або `ifconfig` (macOS/Linux). Порт — той, що показує `npm run dev` (звичайно 5173 чи 3000).
+- Якщо потрібно з'єднатися через інтернет, створіть тунель (наприклад, **ngrok** або **Cloudflare Tunnel**) і використайте видану адресу.
 
-**Prerequisites:**  Node.js
+## Оновлення без втрати даних
+- Не видаляйте `.env.local` і файли проекту; просто вносьте зміни в код і перезапускайте `npm run dev`.
+- Для збереження історії змін ініціалізуйте Git і робіть коміти; це не обнуляє жодні локальні файли.
 
+## Як додати ваш код на GitHub
+1. Створіть новий порожній репозиторій на GitHub (кнопка **New repo**).
+2. У терміналі в корені проекту виконайте:
+   ```bash
+   git init
+   git add .
+   git commit -m "Initial import from AI Studio"
+   git branch -M main
+   git remote add origin https://github.com/<ваш-акаунт>/<назва-репозиторію>.git
+   git push -u origin main
+   ```
+3. Не додавайте у репозиторій файли з секретами (наприклад, `.env.local`). Замість цього тримайте шаблон `.env.local.example`.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Run Locally (оригінальні інструкції)
+1. Встановіть залежності: `npm install`
+2. Додайте ключ `GEMINI_API_KEY` у [.env.local](.env.local)
+3. Запустіть застосунок: `npm run dev`
