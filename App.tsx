@@ -13,6 +13,7 @@ import { NicheDetailsModal } from './components/NicheDetailsModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { Youtube, Settings, Image as ImageIcon, FileVideo, List, Trash2, Plus, AlertTriangle, Check, Search, BarChart, FolderOpen, Calendar, Wallet, FileText, Key } from 'lucide-react';
 import { Button } from './components/Button';
+import { loadNiches as loadNichesFromStorage, saveNiches as persistNiches, loadProjects as loadProjectsFromStorage, saveProjects as persistProjects } from './services/storage';
 
 // ... (Rest of imports and DEFAULT_NICHES remain same, skipping for brevity to focus on change)
 const DEFAULT_NICHES: NicheConfig[] = [
@@ -64,90 +65,72 @@ const parseProjectTitle = (fullTitle: string) => {
     };
 };
 
+const normalizeNiches = (items: NicheConfig[]): NicheConfig[] => {
+    return items.map(n => {
+        const defaultNiche = DEFAULT_NICHES.find(dn => dn.id === n.id);
+        return {
+            ...n,
+            defaultDuration: n.defaultDuration ?? 10,
+            defaultStructureVariants: n.defaultStructureVariants ?? 1,
+            defaultScriptVariants: n.defaultScriptVariants ?? 1,
+            promptHistory: n.promptHistory || [],
+            customStructurePrompt: n.customStructurePrompt !== undefined ? n.customStructurePrompt : defaultNiche?.customStructurePrompt,
+            customScriptPrompt: n.customScriptPrompt !== undefined ? n.customScriptPrompt : defaultNiche?.customScriptPrompt,
+            workflowDescription: n.workflowDescription !== undefined ? n.workflowDescription : defaultNiche?.workflowDescription
+        };
+    });
+};
+
+const normalizeProjects = (items: Project[]): Project[] => {
+    return items.map(p => {
+        const rawPrompts = p.imagePrompts || [];
+        const migratedPrompts = rawPrompts.map((item: any) => {
+            if (typeof item === 'string') {
+                return { en: item, ua: 'Переклад відсутній для старих проєктів' };
+            }
+            return item;
+        });
+
+        let migratedNicheId = p.config.nicheId;
+        if (!migratedNicheId) {
+            const nicheLower = (p.config.niche || '').toLowerCase();
+            if (nicheLower.includes('caprio')) migratedNicheId = 'caprio';
+            else if (nicheLower.includes('slavery')) migratedNicheId = 'slavery';
+            else if (nicheLower.includes('war')) migratedNicheId = 'war';
+            else migratedNicheId = 'generic';
+        }
+
+        return {
+          ...p,
+          config: {
+              ...p.config,
+              nicheId: migratedNicheId,
+              releaseDate: p.config.releaseDate || '',
+              structureVariants: p.config.structureVariants || 1,
+              scriptVariants: p.config.scriptVariants || 1,
+          },
+          isCompleted: p.isCompleted ?? false,
+          imagePrompts: migratedPrompts,
+          imageInstructions: p.imageInstructions || '',
+          generatedImages: p.generatedImages || [],
+          structure: p.structure || [],
+          scriptParts: p.scriptParts || [],
+          structureInstructions: p.structureInstructions,
+          scriptInstructions: p.scriptInstructions
+        };
+    });
+};
+
 const App: React.FC = () => {
   // ... (State declarations)
   const [activeTab, setActiveTab] = useState<AppTab>(AppTab.PROJECTS); 
   const [isProjectCreationMode, setIsProjectCreationMode] = useState(false);
   const scrollPositions = useRef<Partial<Record<AppTab, number>>>({});
 
-  const loadSavedNiches = (): NicheConfig[] => {
-      if (typeof window !== 'undefined') {
-          try {
-              const saved = localStorage.getItem('tubeScript_niches');
-              if (saved) {
-                  const parsed: NicheConfig[] = JSON.parse(saved);
-                  return parsed.map(n => {
-                      const defaultNiche = DEFAULT_NICHES.find(dn => dn.id === n.id);
-                      return {
-                          ...n,
-                          defaultDuration: n.defaultDuration ?? 10,
-                          defaultStructureVariants: n.defaultStructureVariants ?? 1,
-                          defaultScriptVariants: n.defaultScriptVariants ?? 1,
-                          promptHistory: n.promptHistory || [],
-                          customStructurePrompt: n.customStructurePrompt !== undefined ? n.customStructurePrompt : defaultNiche?.customStructurePrompt,
-                          customScriptPrompt: n.customScriptPrompt !== undefined ? n.customScriptPrompt : defaultNiche?.customScriptPrompt,
-                          workflowDescription: n.workflowDescription !== undefined ? n.workflowDescription : defaultNiche?.workflowDescription
-                      };
-                  });
-              }
-          } catch (e) { console.error("Failed to load niches:", e); }
-      }
-      return DEFAULT_NICHES;
-  };
-
-  const loadSavedProjects = (): Project[] => {
-      if (typeof window !== 'undefined') {
-          try {
-              const saved = localStorage.getItem('tubeScript_projects');
-              if (saved) {
-                  const parsed: Project[] = JSON.parse(saved);
-                  return parsed.map(p => {
-                      const rawPrompts = p.imagePrompts || [];
-                      const migratedPrompts = rawPrompts.map((item: any) => {
-                          if (typeof item === 'string') {
-                              return { en: item, ua: 'Переклад відсутній для старих проєктів' };
-                          }
-                          return item;
-                      });
-
-                      let migratedNicheId = p.config.nicheId;
-                      if (!migratedNicheId) {
-                          const nicheLower = (p.config.niche || '').toLowerCase();
-                          if (nicheLower.includes('caprio')) migratedNicheId = 'caprio';
-                          else if (nicheLower.includes('slavery')) migratedNicheId = 'slavery';
-                          else if (nicheLower.includes('war')) migratedNicheId = 'war';
-                          else migratedNicheId = 'generic';
-                      }
-
-                      return {
-                        ...p,
-                        config: {
-                            ...p.config,
-                            nicheId: migratedNicheId, 
-                            releaseDate: p.config.releaseDate || '', 
-                            structureVariants: p.config.structureVariants || 1,
-                            scriptVariants: p.config.scriptVariants || 1,
-                        },
-                        isCompleted: p.isCompleted ?? false, 
-                        imagePrompts: migratedPrompts,
-                        imageInstructions: p.imageInstructions || '',
-                        generatedImages: p.generatedImages || [],
-                        structure: p.structure || [],
-                        scriptParts: p.scriptParts || [],
-                        structureInstructions: p.structureInstructions,
-                        scriptInstructions: p.scriptInstructions
-                      };
-                  });
-              }
-          } catch (e) { console.error("Failed to load projects:", e); }
-      }
-      return [];
-  };
-
-  const [niches, setNiches] = useState<NicheConfig[]>(loadSavedNiches);
-  const [draftNiches, setDraftNiches] = useState<NicheConfig[]>(loadSavedNiches);
+  const [niches, setNiches] = useState<NicheConfig[]>(DEFAULT_NICHES);
+  const [draftNiches, setDraftNiches] = useState<NicheConfig[]>(DEFAULT_NICHES);
   const [validationErrorIds, setValidationErrorIds] = useState<Set<string>>(new Set());
-  
+
   const [pendingTab, setPendingTab] = useState<AppTab | null>(null);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [nicheToDelete, setNicheToDelete] = useState<string | null>(null);
@@ -155,7 +138,7 @@ const App: React.FC = () => {
   const [showTransportModal, setShowTransportModal] = useState(false);
 
   const [appState, setAppState] = useState<AppState>(AppState.INPUT);
-  const [projects, setProjects] = useState<Project[]>(loadSavedProjects);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [selectedScriptTitle, setSelectedScriptTitle] = useState<string | null>(null);
 
   const [refinePartSelection, setRefinePartSelection] = useState<{[key: number]: string}>({}); 
@@ -172,18 +155,42 @@ const App: React.FC = () => {
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const nichesLoadedRef = useRef(false);
+  const projectsLoadedRef = useRef(false);
+
   useEffect(() => {
-      try {
-          localStorage.setItem('tubeScript_niches', JSON.stringify(niches));
-      } catch (e) { console.error("Failed to save niches", e); }
+      let mounted = true;
+      (async () => {
+          const loadedNiches = await loadNichesFromStorage(DEFAULT_NICHES);
+          const normalizedNiches = normalizeNiches(loadedNiches.length ? loadedNiches : DEFAULT_NICHES);
+          if (!mounted) return;
+          setNiches(normalizedNiches);
+          setDraftNiches(normalizedNiches);
+          nichesLoadedRef.current = true;
+      })();
+      return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+      let mounted = true;
+      (async () => {
+          const loadedProjects = await loadProjectsFromStorage();
+          const normalizedProjects = normalizeProjects(loadedProjects);
+          if (!mounted) return;
+          setProjects(normalizedProjects);
+          projectsLoadedRef.current = true;
+      })();
+      return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+      if (!nichesLoadedRef.current) return;
+      void persistNiches(niches);
   }, [niches]);
 
   useEffect(() => {
-      try {
-          localStorage.setItem('tubeScript_projects', JSON.stringify(projects));
-      } catch (e: any) {
-          if (e.name === 'QuotaExceededError') showToast("Увага! Пам'ять переповнена.", 'error');
-      }
+      if (!projectsLoadedRef.current) return;
+      void persistProjects(projects);
   }, [projects]);
 
   useEffect(() => {
