@@ -35,6 +35,32 @@
 - Увімкни RLS і політики, що дозволяють читати та оновлювати ці два рядки потрібним користувачам.
 - У `.env.local` пропиши `VITE_SUPABASE_URL` і `VITE_SUPABASE_ANON_KEY` (див. крок 5 вище). Фронтенд напряму читає/пише в Supabase і продовжує кешувати дані в `localStorage` як резерв.
 
+### Налаштування Auth та RLS у Supabase
+1. Увімкни **Email** (password) у вкладці **Authentication → Providers**. Для тесту створити два акаунти можна через **Authentication → Users → Add user**.
+2. Перевір, що в таблиці `collections` увімкнено **RLS**.
+3. Додай політики (SQL) для ролі `authenticated`:
+   ```sql
+   create policy "Authenticated can read collections"
+     on public.collections for select
+     using (auth.role() = 'authenticated');
+
+   create policy "Authenticated can insert collections"
+     on public.collections for insert
+     with check (auth.role() = 'authenticated');
+
+   create policy "Authenticated can update collections"
+     on public.collections for update
+     using (auth.role() = 'authenticated')
+     with check (auth.role() = 'authenticated');
+   ```
+   > Якщо потрібне розмежування доступу, додавай фільтр `auth.uid()` або поле власника.
+4. Переконайся, що без входу запити до `collections` повертають 401/403 (RLS блокує), а з різними акаунтами видно тільки дозволені дані.
+
+### Як увійти у фронтенді
+- Додай ключі `VITE_SUPABASE_URL` і `VITE_SUPABASE_ANON_KEY` у `.env.local`.
+- Відкрий застосунок і заповни форму входу/реєстрації (Email/Password). Сесія зберігається, тому після перезавантаження дані з Supabase тягнуться автоматично.
+- Без входу додаток працює лише з локальним кешем і відмовляє у записі в Supabase.
+
 ## Як підключити другий пристрій
 - Якщо обидва пристрої в одній мережі Wi‑Fi/Ethernet, відкрийте адресу `http://IP_цього_ПК:порт`, де IP можна дізнатись через `ipconfig` (Windows) або `ifconfig` (macOS/Linux). Порт — той, що показує `npm run dev` (звичайно 5173 чи 3000).
 - Якщо потрібно з'єднатися через інтернет, створіть тунель (наприклад, **ngrok** або **Cloudflare Tunnel**) і використайте видану адресу.

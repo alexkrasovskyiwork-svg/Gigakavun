@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import type { Session } from '@supabase/supabase-js';
 import { VideoConfig, ScriptPart, AppState, Project, AppTab, NicheConfig } from './types';
 import { generateStructure, generateScriptSection, refineStructure, regenerateScriptSection, CAPRIO_BASE_PROMPT, SLAVERY_PROMPT_TEMPLATE, WAR_BASE_PROMPT, CAPRIO_SCRIPT_PROMPT, SLAVERY_SCRIPT_PROMPT, WAR_SCRIPT_PROMPT_TEMPLATE } from './services/geminiService';
 import { SetupForm } from './components/SetupForm';
@@ -13,7 +14,8 @@ import { NicheDetailsModal } from './components/NicheDetailsModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { Youtube, Settings, Image as ImageIcon, FileVideo, List, Trash2, Plus, AlertTriangle, Check, Search, BarChart, FolderOpen, Calendar, Wallet, FileText, Key } from 'lucide-react';
 import { Button } from './components/Button';
-import { loadNiches as loadNichesFromStorage, saveNiches as persistNiches, loadProjects as loadProjectsFromStorage, saveProjects as persistProjects } from './services/storage';
+import { loadNiches as loadNichesFromStorage, saveNiches as persistNiches, loadProjects as loadProjectsFromStorage, saveProjects as persistProjects, AuthRequiredError } from './services/storage';
+import { supabase } from './services/supabaseClient';
 
 // ... (Rest of imports and DEFAULT_NICHES remain same, skipping for brevity to focus on change)
 const DEFAULT_NICHES: NicheConfig[] = [
@@ -147,6 +149,14 @@ const App: React.FC = () => {
 
   const [toast, setToast] = useState<{message: string, type: 'error' | 'success' | 'info'} | null>(null);
   const [sessionCost, setSessionCost] = useState(0);
+
+  const [authSession, setAuthSession] = useState<Session | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
   
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
@@ -159,39 +169,124 @@ const App: React.FC = () => {
   const projectsLoadedRef = useRef(false);
 
   useEffect(() => {
+      if (!supabase) {
+          setAuthChecked(true);
+          return;
+      }
+
       let mounted = true;
-      (async () => {
-          const loadedNiches = await loadNichesFromStorage(DEFAULT_NICHES);
-          const normalizedNiches = normalizeNiches(loadedNiches.length ? loadedNiches : DEFAULT_NICHES);
+      supabase.auth.getSession()
+          .then(({ data, error }) => {
+              if (!mounted) return;
+              if (error) {
+                  setAuthError(error.message);
+              }
+              setAuthSession(data.session);
+          })
+          .catch(() => {
+              if (!mounted) return;
+              setAuthError('Не вдалося перевірити сесію Supabase');
+          })
+          .finally(() => {
+              if (!mounted) return;
+              setAuthChecked(true);
+          });
+
+      const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
           if (!mounted) return;
-          setNiches(normalizedNiches);
-          setDraftNiches(normalizedNiches);
-          nichesLoadedRef.current = true;
-      })();
-      return () => { mounted = false; };
+          setAuthSession(session);
+          if (session) {
+              setAuthError(null);
+          } else {
+              setAuthMode('login');
+          }
+      });
+
+      return () => {
+          mounted = false;
+          listener?.subscription.unsubscribe();
+      };
   }, []);
 
   useEffect(() => {
       let mounted = true;
       (async () => {
-          const loadedProjects = await loadProjectsFromStorage();
-          const normalizedProjects = normalizeProjects(loadedProjects);
-          if (!mounted) return;
-          setProjects(normalizedProjects);
-          projectsLoadedRef.current = true;
+          if (!authChecked) return;
+          const canUseRemote = !!authSession && !!supabase;
+          try {
+              const loadedNiches = await loadNichesFromStorage(DEFAULT_NICHES, { useRemote: canUseRemote });
+              const normalizedNiches = normalizeNiches(loadedNiches.length ? loadedNiches : DEFAULT_NICHES);
+              if (!mounted) return;
+              setNiches(normalizedNiches);
+              setDraftNiches(normalizedNiches);
+              nichesLoadedRef.current = true;
+          } catch (error) {
+              if (error instanceof AuthRequiredError) {
+                  setAuthError('Потрібно увійти, щоб читати дані з Supabase.');
+              }
+              const localNiches = await loadNichesFromStorage(DEFAULT_NICHES, { useRemote: false });
+              const normalizedLocal = normalizeNiches(localNiches.length ? localNiches : DEFAULT_NICHES);
+              if (!mounted) return;
+              setNiches(normalizedLocal);
+              setDraftNiches(normalizedLocal);
+              nichesLoadedRef.current = true;
+          }
       })();
       return () => { mounted = false; };
-  }, []);
+  }, [authChecked, authSession]);
+
+  useEffect(() => {
+      let mounted = true;
+      (async () => {
+          if (!authChecked) return;
+          const canUseRemote = !!authSession && !!supabase;
+          try {
+              const loadedProjects = await loadProjectsFromStorage({ useRemote: canUseRemote });
+              const normalizedProjects = normalizeProjects(loadedProjects);
+              if (!mounted) return;
+              setProjects(normalizedProjects);
+              projectsLoadedRef.current = true;
+          } catch (error) {
+              if (error instanceof AuthRequiredError) {
+                  setAuthError('Потрібно увійти, щоб читати дані з Supabase.');
+              }
+              const localProjects = await loadProjectsFromStorage({ useRemote: false });
+              const normalizedProjects = normalizeProjects(localProjects);
+              if (!mounted) return;
+              setProjects(normalizedProjects);
+              projectsLoadedRef.current = true;
+          }
+      })();
+      return () => { mounted = false; };
+  }, [authChecked, authSession]);
 
   useEffect(() => {
       if (!nichesLoadedRef.current) return;
-      void persistNiches(niches);
-  }, [niches]);
+      const canUseRemote = !!authSession && !!supabase;
+      void (async () => {
+          try {
+              await persistNiches(niches, { useRemote: canUseRemote });
+          } catch (error) {
+              if (error instanceof AuthRequiredError) {
+                  showToast('Увійдіть, щоб синхронізувати налаштування ніш у Supabase', 'error');
+              }
+          }
+      })();
+  }, [niches, authSession]);
 
   useEffect(() => {
       if (!projectsLoadedRef.current) return;
-      void persistProjects(projects);
-  }, [projects]);
+      const canUseRemote = !!authSession && !!supabase;
+      void (async () => {
+          try {
+              await persistProjects(projects, { useRemote: canUseRemote });
+          } catch (error) {
+              if (error instanceof AuthRequiredError) {
+                  showToast('Увійдіть, щоб синхронізувати проєкти у Supabase', 'error');
+              }
+          }
+      })();
+  }, [projects, authSession]);
 
   useEffect(() => {
       if (typeof window !== 'undefined') {
@@ -215,6 +310,48 @@ const App: React.FC = () => {
 
   const showToast = (message: string, type: 'error' | 'success' | 'info' = 'info') => {
       setToast({ message, type });
+  };
+
+  const handleAuthSubmit = async (event: React.FormEvent) => {
+      event.preventDefault();
+      if (!supabase) {
+          setAuthError('Supabase не налаштований. Додайте URL і ключ у .env.local');
+          return;
+      }
+
+      setIsAuthLoading(true);
+      setAuthError(null);
+      if (authMode === 'login') {
+          const { data, error } = await supabase.auth.signInWithPassword({
+              email: authEmail,
+              password: authPassword,
+          });
+          if (error) {
+              setAuthError(error.message);
+          } else {
+              setAuthSession(data.session);
+              showToast('Вхід виконано', 'success');
+          }
+      } else {
+          const { data, error } = await supabase.auth.signUp({
+              email: authEmail,
+              password: authPassword,
+          });
+          if (error) {
+              setAuthError(error.message);
+          } else {
+              setAuthSession(data.session);
+              showToast('Реєстрація успішна. Перевірте пошту для підтвердження.', 'success');
+          }
+      }
+      setIsAuthLoading(false);
+  };
+
+  const handleSignOut = async () => {
+      if (!supabase) return;
+      await supabase.auth.signOut();
+      setAuthSession(null);
+      showToast('Ви вийшли з акаунту', 'info');
   };
 
   const addToCost = (amount: number) => {
@@ -881,6 +1018,71 @@ const App: React.FC = () => {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-12">
+          <div id="supabase-auth" className="mb-8">
+              {supabase ? (
+                  authSession ? (
+                      <div className="bg-yt-gray border border-white/10 rounded-xl p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                          <div>
+                              <p className="text-sm text-gray-400">Ви увійшли як</p>
+                              <p className="text-lg font-semibold text-white">{authSession.user.email}</p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                              <span className="text-xs text-gray-400 bg-white/5 px-3 py-1 rounded-full border border-white/10">Сесія збережена</span>
+                              <Button variant="secondary" onClick={handleSignOut} className="text-sm h-10 px-4">Вийти</Button>
+                          </div>
+                      </div>
+                  ) : (
+                      <div className="bg-yt-gray border border-white/10 rounded-xl p-6">
+                          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                              <div>
+                                  <p className="text-xs uppercase tracking-wide text-gray-400 font-bold mb-1">Supabase Auth</p>
+                                  <h2 className="text-xl font-bold text-white">Увійдіть або зареєструйтесь, щоб синхронізувати дані</h2>
+                                  <p className="text-sm text-gray-400">Доступ до таблиці collections дозволено лише для автентифікованих користувачів</p>
+                              </div>
+                              <Button variant="secondary" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-sm h-10 px-4">
+                                  {authMode === 'login' ? 'Немає акаунту? Зареєструватися' : 'Вже є акаунт? Увійти'}
+                              </Button>
+                          </div>
+                          <form className="grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={handleAuthSubmit}>
+                              <label className="flex flex-col gap-2 text-sm text-gray-300">
+                                  Email
+                                  <input
+                                      type="email"
+                                      required
+                                      value={authEmail}
+                                      onChange={(e) => setAuthEmail(e.target.value)}
+                                      className="bg-black/40 border border-white/10 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
+                                  />
+                              </label>
+                              <label className="flex flex-col gap-2 text-sm text-gray-300">
+                                  Пароль
+                                  <input
+                                      type="password"
+                                      required
+                                      value={authPassword}
+                                      onChange={(e) => setAuthPassword(e.target.value)}
+                                      className="bg-black/40 border border-white/10 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
+                                  />
+                              </label>
+                              <div className="md:col-span-2 flex flex-col gap-2">
+                                  {authError && <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2">{authError}</div>}
+                                  {!authChecked && <div className="text-sm text-gray-400">Перевіряємо активну сесію...</div>}
+                              </div>
+                              <div className="md:col-span-2 flex justify-end gap-3">
+                                  <Button type="submit" disabled={isAuthLoading} className="text-sm h-10 px-4">
+                                      {isAuthLoading ? 'Зачекайте...' : authMode === 'login' ? 'Увійти' : 'Зареєструватись'}
+                                  </Button>
+                              </div>
+                          </form>
+                      </div>
+                  )
+              ) : (
+                  <div className="bg-red-900/10 border border-red-700/30 text-red-200 rounded-xl p-6">
+                      <p className="font-semibold mb-1">Supabase не налаштований</p>
+                      <p className="text-sm text-red-100/90">Додайте <code className="bg-black/40 px-2 py-1 rounded">VITE_SUPABASE_URL</code> та <code className="bg-black/40 px-2 py-1 rounded">VITE_SUPABASE_ANON_KEY</code> у .env.local, щоб увімкнути збереження в базі.</p>
+                  </div>
+              )}
+          </div>
           <div style={{ display: activeTab === AppTab.PROJECTS ? 'block' : 'none' }}>
               {isProjectCreationMode ? (
                 <div className="flex flex-col items-center justify-center min-h-[60vh] animate-fade-in-up">
